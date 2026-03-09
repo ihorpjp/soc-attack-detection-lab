@@ -1,0 +1,195 @@
+# =============================================================================
+# SOC Attack Detection Lab — Docker Compose
+# Stack: Wazuh SIEM + Elasticsearch + Kibana + Suricata IDS
+# =============================================================================
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose logs -f wazuh-manager
+#
+# Ports:
+#   Kibana dashboard  → http://localhost:5601  (admin / SecretPassword1!)
+#   Wazuh API         → https://localhost:55000 (wazuh-wui / MyS3cr3tP4ssw0rd*)
+#   Elasticsearch     → http://localhost:9200
+
+version: '3.8'
+
+volumes:
+  wazuh_api_configuration:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_queue:
+  wazuh_var_multigroups:
+  wazuh_integrations:
+  wazuh_active_response:
+  wazuh_agentless:
+  wazuh_wodles:
+  filebeat_etc:
+  filebeat_var:
+  elastic_data:
+  kibana_data:
+  suricata_logs:
+
+networks:
+  soc-lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+services:
+
+  # ── Elasticsearch ────────────────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.13
+    container_name: elasticsearch
+    hostname: elasticsearch
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=soc-lab-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=SecretPassword1!
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - elastic_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      soc-lab:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -u elastic:SecretPassword1! http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  # ── Kibana ───────────────────────────────────────────────────────────────────
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.13
+    container_name: kibana
+    hostname: kibana
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=SecretPassword1!
+      - SERVER_NAME=kibana
+      - XPACK_SECURITY_ENCRYPTIONKEY=a7a6311933d3503b89bc2dbc36572c33a6c10925682e591bffcab6911c06786d
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=a7a6311933d3503b89bc2dbc36572c33a6c10925682e591bffcab6911c06786d
+    volumes:
+      - kibana_data:/usr/share/kibana/data
+    ports:
+      - "5601:5601"
+    networks:
+      soc-lab:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q 'available'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  # ── Wazuh Manager ────────────────────────────────────────────────────────────
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.0
+    container_name: wazuh-manager
+    hostname: wazuh-manager
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 655360
+        hard: 655360
+    environment:
+      - INDEXER_URL=https://elasticsearch:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword1!
+      - FILEBEAT_SSL_VERIFICATION_MODE=none
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr3tP4ssw0rd*
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+      - ./wazuh/config/ossec.conf:/wazuh-config-mount/etc/ossec.conf
+    ports:
+      - "1514:1514/udp"     # Agent events
+      - "1515:1515"         # Agent enrollment
+      - "514:514/udp"       # Syslog
+      - "55000:55000"       # Wazuh API
+    networks:
+      soc-lab:
+        ipv4_address: 172.20.0.12
+
+  # ── Wazuh Agent (monitors the target machine) ─────────────────────────────
+  wazuh-agent:
+    image: wazuh/wazuh-agent:4.7.0
+    container_name: wazuh-agent
+    hostname: target-server
+    depends_on:
+      - wazuh-manager
+    environment:
+      - WAZUH_MANAGER=wazuh-manager
+      - WAZUH_AGENT_NAME=target-server
+    volumes:
+      - /var/log:/var/log:ro        # Read host logs
+      - suricata_logs:/var/log/suricata:ro
+    networks:
+      soc-lab:
+        ipv4_address: 172.20.0.13
+    cap_add:
+      - SYS_PTRACE
+    pid: "host"
+
+  # ── Suricata IDS ──────────────────────────────────────────────────────────
+  suricata:
+    image: jasonish/suricata:latest
+    container_name: suricata
+    hostname: suricata
+    network_mode: host          # Needs host network to see traffic
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    volumes:
+      - suricata_logs:/var/log/suricata
+      - ./suricata/rules:/etc/suricata/rules
+    command: -i eth0 --set af-packet.iface=eth0
+    environment:
+      - SURICATA_OPTIONS=-i eth0
+
+  # ── Attack Simulator (Kali-based tooling) ─────────────────────────────────
+  attacker:
+    image: kalilinux/kali-rolling
+    container_name: attacker
+    hostname: attacker-kali
+    networks:
+      soc-lab:
+        ipv4_address: 172.20.0.99
+    command: sleep infinity
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW

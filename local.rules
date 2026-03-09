@@ -1,0 +1,109 @@
+# =============================================================================
+# Suricata Custom Rules — SOC Attack Detection Lab
+# =============================================================================
+# These rules are optimised for the lab environment (172.20.0.0/24 network).
+# Add to /etc/suricata/rules/local.rules
+
+# ── SSH Brute Force Detection ─────────────────────────────────────────────────
+
+# Detect rapid SSH connection attempts (scanner behaviour)
+alert tcp any any -> $HOME_NET 22 (
+    msg:"SOC-LAB SSH Brute Force Attempt";
+    flags:S;
+    threshold: type threshold, track by_src, count 5, seconds 60;
+    classtype:attempted-admin;
+    sid:9000001;
+    rev:1;
+    metadata:attack_type brute_force, severity high;
+)
+
+# Detect SSH login failures via banner grab timing
+alert tcp any any -> $HOME_NET 22 (
+    msg:"SOC-LAB SSH Rapid Connection Cycling";
+    flow:to_server,established;
+    threshold: type both, track by_src, count 10, seconds 30;
+    classtype:attempted-user;
+    sid:9000002;
+    rev:1;
+)
+
+# ── Port Scan Detection ───────────────────────────────────────────────────────
+
+# Detect SYN scan (nmap -sS)
+alert tcp any any -> $HOME_NET any (
+    msg:"SOC-LAB Nmap SYN Port Scan Detected";
+    flags:S,12;
+    threshold: type threshold, track by_src, count 20, seconds 10;
+    classtype:network-scan;
+    sid:9000010;
+    rev:1;
+    metadata:attack_type port_scan, tool nmap;
+)
+
+# Detect NULL scan (nmap -sN)
+alert tcp any any -> $HOME_NET any (
+    msg:"SOC-LAB Nmap NULL Scan Detected";
+    flags:0;
+    classtype:network-scan;
+    sid:9000011;
+    rev:1;
+)
+
+# Detect FIN scan (nmap -sF)
+alert tcp any any -> $HOME_NET any (
+    msg:"SOC-LAB Nmap FIN Scan Detected";
+    flags:F,12;
+    threshold: type threshold, track by_src, count 10, seconds 10;
+    classtype:network-scan;
+    sid:9000012;
+    rev:1;
+)
+
+# Detect XMAS scan (nmap -sX)
+alert tcp any any -> $HOME_NET any (
+    msg:"SOC-LAB Nmap XMAS Scan Detected";
+    flags:FPU;
+    classtype:network-scan;
+    sid:9000013;
+    rev:1;
+)
+
+# Detect UDP scan (nmap -sU)
+alert udp any any -> $HOME_NET any (
+    msg:"SOC-LAB UDP Port Scan Detected";
+    threshold: type threshold, track by_src, count 20, seconds 10;
+    classtype:network-scan;
+    sid:9000014;
+    rev:1;
+)
+
+# Detect OS fingerprinting attempts
+alert tcp any any -> $HOME_NET any (
+    msg:"SOC-LAB OS Fingerprinting Detected";
+    flags:SF;
+    threshold: type threshold, track by_src, count 5, seconds 5;
+    classtype:network-scan;
+    sid:9000015;
+    rev:1;
+)
+
+# ── Privilege Escalation Indicators ──────────────────────────────────────────
+
+# Detect attempts to reach common internal management ports after SSH
+alert tcp $HOME_NET any -> $HOME_NET [3306,5432,6379,27017] (
+    msg:"SOC-LAB Internal Service Lateral Movement Attempt";
+    flow:to_server,established;
+    classtype:attempted-user;
+    sid:9000020;
+    rev:1;
+)
+
+# ── Attacker IP Tracking ──────────────────────────────────────────────────────
+
+# Alert on traffic from the simulated attacker (172.20.0.99)
+alert ip 172.20.0.99 any -> $HOME_NET any (
+    msg:"SOC-LAB Traffic from Attacker Machine";
+    classtype:policy-violation;
+    sid:9000030;
+    rev:1;
+)
