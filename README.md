@@ -282,7 +282,7 @@ docker-compose down -v --remove-orphans
 IT Support Specialist | Junior SOC Analyst
 Luxembourg
 
-[GitHub](https://github.com/ihorbezruchko) · [LinkedIn](https://linkedin.com/in/ihorbezruchko)
+[LinkedIn](https://www.linkedin.com/in/ihor-bezruchko-31637a2b7/)
 
 ---
 
